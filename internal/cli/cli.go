@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"strconv"
@@ -14,12 +15,17 @@ import (
 
 const DEFAULT_TIMEOUT = 10 * time.Second
 
-// Command keeps execution separate from text rendering. Execute must honor ctx.
-// Execute receives positional arguments after the common options are removed.
+// ExecuteFunc runs one invocation and returns data for rendering.
+// Implementations must honor ctx.
+type ExecuteFunc func(ctx context.Context, args []string) (any, error)
+
+// Command creates invocation-local flags and execution state. New registers only
+// command-specific flags. It must not register the reserved common option names.
+// The returned function receives positional arguments after option parsing.
 type Command struct {
 	Name    string
 	Summary string
-	Execute func(ctx context.Context, args []string) (any, error)
+	New     func(flags *flag.FlagSet) ExecuteFunc
 	Text    func(out io.Writer, data any) error
 }
 
@@ -28,14 +34,33 @@ type options struct {
 	help       bool
 	timeout    time.Duration
 	positional []string
+	version    bool
+	execute    ExecuteFunc
+	flags      *flag.FlagSet
 }
 
-func parse(args []string) (options, error) {
+func parse(args []string, commands []Command) (options, error) {
 	parsed := options{timeout: DEFAULT_TIMEOUT}
+	addPositional := func(value string) {
+		parsed.positional = append(parsed.positional, value)
+		if len(parsed.positional) != 1 {
+			return
+		}
+		for _, command := range commands {
+			if command.Name == value {
+				parsed.flags = flag.NewFlagSet(value, flag.ContinueOnError)
+				parsed.flags.SetOutput(io.Discard)
+				parsed.execute = command.New(parsed.flags)
+				break
+			}
+		}
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
-			parsed.positional = append(parsed.positional, args[i+1:]...)
+			for _, value := range args[i+1:] {
+				addPositional(value)
+			}
 			break
 		}
 		name, value, hasValue := strings.Cut(arg, "=")
@@ -58,7 +83,7 @@ func parse(args []string) (options, error) {
 			if hasValue {
 				return parsed, fmt.Errorf("option %q takes no value", name)
 			}
-			parsed.positional = append(parsed.positional, "version")
+			parsed.version = true
 		case "--timeout":
 			if !hasValue {
 				i++
@@ -77,27 +102,56 @@ func parse(args []string) (options, error) {
 			parsed.timeout = duration
 		default:
 			if strings.HasPrefix(arg, "-") {
-				return parsed, fmt.Errorf("unknown option %q", arg)
+				optionName := strings.TrimLeft(name, "-")
+				if parsed.flags == nil || parsed.flags.Lookup(optionName) == nil {
+					return parsed, fmt.Errorf("unknown option %q", arg)
+				}
+				option := parsed.flags.Lookup(optionName)
+				if !hasValue {
+					boolean, ok := option.Value.(interface{ IsBoolFlag() bool })
+					if ok && boolean.IsBoolFlag() {
+						value = "true"
+					} else {
+						i++
+						if i == len(args) {
+							return parsed, fmt.Errorf("%s requires a value", name)
+						}
+						value = args[i]
+					}
+				}
+				if err := parsed.flags.Set(optionName, value); err != nil {
+					return parsed, fmt.Errorf("invalid %s value %q: %w", name, value, err)
+				}
+			} else {
+				addPositional(arg)
 			}
-			parsed.positional = append(parsed.positional, arg)
 		}
 	}
+	if parsed.version {
+		if len(parsed.positional) > 0 {
+			return parsed, errors.New("--version and -v must be used without a command")
+		}
+		addPositional("version")
+	}
+
 	return parsed, nil
 }
 
 // Run returns an exit status. It writes results to out and errors to errOut.
 func Run(ctx context.Context, args []string, out, errOut io.Writer, version string, commands []Command) int {
 	fail := func(err error, code int) int { fmt.Fprintln(errOut, "netknife:", err); return code }
-	parsed, err := parse(args)
+	versionCommand := Command{Name: "version", Summary: "Show the version", New: func(*flag.FlagSet) ExecuteFunc {
+		return func(context.Context, []string) (any, error) {
+			return struct {
+				Version string `json:"version"`
+			}{version}, nil
+		}
+	}, Text: func(out io.Writer, _ any) error { _, err := fmt.Fprintln(out, version); return err }}
+	available := append([]Command{versionCommand}, commands...)
+	parsed, err := parse(args, available)
 	if err != nil {
 		return fail(err, 2)
 	}
-	versionCommand := Command{Name: "version", Summary: "Show the version", Execute: func(context.Context, []string) (any, error) {
-		return struct {
-			Version string `json:"version"`
-		}{version}, nil
-	}, Text: func(out io.Writer, _ any) error { _, err := fmt.Fprintln(out, version); return err }}
-	available := append([]Command{versionCommand}, commands...)
 	name := "help"
 	var positional []string
 	if len(parsed.positional) > 0 {
@@ -120,6 +174,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 			for _, command := range available {
 				if command.Name == target {
 					found = true
+					if parsed.flags == nil {
+						parsed.flags = flag.NewFlagSet(target, flag.ContinueOnError)
+						command.New(parsed.flags)
+					}
 				}
 			}
 			if !found {
@@ -135,7 +193,11 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 				fmt.Fprintf(&text, "  %-10s %s\n", command.Name, command.Summary)
 			}
 		}
-		fmt.Fprint(&text, "\nOptions:\n  -h, --help       Show help\n  -v, --version    Show the version\n  --json          Write a JSON result\n  --timeout <d>   Execution timeout (default 10s)\n")
+		fmt.Fprint(&text, "\nOptions:\n  -h, --help       Show help\n  -v, --version    Show the version (standalone)\n  --json          Write a JSON result\n  --timeout <d>   Execution timeout (default 10s)\n")
+		if parsed.flags != nil {
+			parsed.flags.SetOutput(&text)
+			parsed.flags.PrintDefaults()
+		}
 		if _, err := io.WriteString(out, text.String()); err != nil {
 			return fail(err, 1)
 		}
@@ -165,7 +227,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 	if executionCtx.Err() != nil {
 		return checkContext()
 	}
-	data, err := selected.Execute(executionCtx, positional)
+	data, err := parsed.execute(executionCtx, positional)
 	if executionCtx.Err() != nil {
 		return checkContext()
 	}

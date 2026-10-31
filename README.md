@@ -20,7 +20,7 @@ go build -ldflags '-X main.version=1.0.0' -o netknife ./cmd/netknife
 
 ## Command and flag contract
 
-`help`, `--help`, and `-h` show help. With no arguments, netknife shows help. Use `help version` or `version --help` for command help. `version`, `--version`, and `-v` show the build version.
+`help`, `--help`, and `-h` show help. With no arguments, netknife shows help. Use `help version` or `version --help` for command help. `version` shows the build version. `--version` and `-v` are standalone shortcuts. They accept common flags such as `--json`, but cannot be combined with a command. For example, `--version info` is an argument error, even if `info` is registered.
 
 Common flags can appear before or after the command and its arguments:
 
@@ -55,4 +55,4 @@ Errors go to standard error as `netknife: <reason>` followed by a newline. Argum
 
 The executable currently registers only help and version. The internal command runner accepts context-aware diagnostic functions and separate text formatters. The `info`, `ping`, `dns`, and `trace` implementations are outside this change.
 
-Command-specific options are not registered yet. Each diagnostic issue must add its option parsing and validation alongside its implementation. Unknown options currently fail, including options from diagnostics that are not installed.
+Command-specific options belong to each command. `Command.New` registers them on a fresh standard-library `flag.FlagSet` and returns an execution function that uses those invocation-local values. Command options must appear after the command name. The shared parser consumes each option value according to its registered type, so values that resemble common flags remain values. Common option names are reserved. Unknown options fail before execution. Command help displays the registered options. Diagnostic issues can register flags without changing the common parser.

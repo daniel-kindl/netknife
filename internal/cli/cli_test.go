@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"testing"
@@ -42,13 +43,13 @@ type probeResult struct {
 }
 
 func TestDiagnosticRendering(t *testing.T) {
-	command := Command{Name: "probe", Summary: "Test command", Execute: func(ctx context.Context, args []string) (any, error) {
+	command := Command{Name: "probe", Summary: "Test command", New: withoutFlags(func(ctx context.Context, args []string) (any, error) {
 		deadline, ok := ctx.Deadline()
 		if !ok || time.Until(deadline) > 3*time.Second {
 			return nil, errors.New("missing timeout")
 		}
 		return probeResult{args[0]}, nil
-	}, Text: func(out io.Writer, data any) error {
+	}), Text: func(out io.Writer, data any) error {
 		_, err := fmt.Fprintln(out, "host:", data.(probeResult).Host)
 		return err
 	}}
@@ -69,7 +70,7 @@ func TestDiagnosticRendering(t *testing.T) {
 func TestCancellationDuringExecution(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	command := Command{Name: "probe", Execute: func(ctx context.Context, _ []string) (any, error) { cancel(); <-ctx.Done(); return nil, ctx.Err() }}
+	command := Command{Name: "probe", New: withoutFlags(func(ctx context.Context, _ []string) (any, error) { cancel(); <-ctx.Done(); return nil, ctx.Err() })}
 	var out, diagnostic bytes.Buffer
 	if code := Run(ctx, []string{"probe", "--json"}, &out, &diagnostic, "dev", []Command{command}); code != 130 || out.Len() != 0 || diagnostic.String() != "netknife: cancelled\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
@@ -104,7 +105,7 @@ func TestExecutionErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out, diagnostic bytes.Buffer
-			code := Run(tc.ctx, []string{"probe", "--json"}, &out, &diagnostic, "dev", []Command{{Name: "probe", Execute: tc.execute}})
+			code := Run(tc.ctx, []string{"probe", "--json"}, &out, &diagnostic, "dev", []Command{{Name: "probe", New: withoutFlags(tc.execute)}})
 			if code != tc.code || out.Len() != 0 || diagnostic.String() != tc.want {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
 			}
@@ -132,11 +133,11 @@ func TestWriteFailures(t *testing.T) {
 
 func TestTimeoutDuringExecution(t *testing.T) {
 	started := false
-	command := Command{Name: "probe", Execute: func(ctx context.Context, _ []string) (any, error) {
+	command := Command{Name: "probe", New: withoutFlags(func(ctx context.Context, _ []string) (any, error) {
 		started = true
 		<-ctx.Done()
 		return nil, ctx.Err()
-	}}
+	})}
 	var out, diagnostic bytes.Buffer
 	if code := Run(context.Background(), []string{"probe", "--timeout=1s", "--json"}, &out, &diagnostic, "dev", []Command{command}); code != 1 || !started || out.Len() != 0 || diagnostic.String() != "netknife: timeout exceeded\n" {
 		t.Fatalf("started=%v code=%d stdout=%q stderr=%q", started, code, out.String(), diagnostic.String())
@@ -144,10 +145,70 @@ func TestTimeoutDuringExecution(t *testing.T) {
 }
 
 func TestPositionalAndRepeatedOptions(t *testing.T) {
-	command := Command{Name: "probe", Execute: func(_ context.Context, args []string) (any, error) { return args, nil }}
+	command := Command{Name: "probe", New: withoutFlags(func(_ context.Context, args []string) (any, error) { return args, nil })}
 	var out, diagnostic bytes.Buffer
 	code := Run(context.Background(), []string{"--json=false", "probe", "--json", "--", "--host", "example.com"}, &out, &diagnostic, "dev", []Command{command})
 	if code != 0 || out.String() != "{\"command\":\"probe\",\"data\":[\"--host\",\"example.com\"]}\n" || diagnostic.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
+	}
+}
+
+func TestCommandOwnsFlags(t *testing.T) {
+	command := Command{Name: "probe", Summary: "Probe a host", New: func(flags *flag.FlagSet) ExecuteFunc {
+		count := flags.Int("count", 1, "Number of checks")
+		return func(_ context.Context, args []string) (any, error) {
+			return struct {
+				Count int    `json:"count"`
+				Host  string `json:"host"`
+			}{*count, args[0]}, nil
+		}
+	}}
+	for _, args := range [][]string{{"probe", "example.com", "--count", "5", "--json"}, {"--json", "probe", "--count=5", "example.com"}} {
+		var out, diagnostic bytes.Buffer
+		if code := Run(context.Background(), args, &out, &diagnostic, "dev", []Command{command}); code != 0 || out.String() != "{\"command\":\"probe\",\"data\":{\"count\":5,\"host\":\"example.com\"}}\n" || diagnostic.Len() != 0 {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
+		}
+	}
+	var out, diagnostic bytes.Buffer
+	if code := Run(context.Background(), []string{"probe", "--count=bad"}, &out, &diagnostic, "dev", []Command{command}); code != 2 || out.Len() != 0 || diagnostic.Len() == 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
+	}
+}
+
+func TestVersionShortcutIsStandalone(t *testing.T) {
+	for _, args := range [][]string{{"--version", "info"}, {"info", "--version"}, {"-v", "version"}} {
+		var out, diagnostic bytes.Buffer
+		if code := Run(context.Background(), args, &out, &diagnostic, "dev", nil); code != 2 || out.Len() != 0 || diagnostic.String() != "netknife: --version and -v must be used without a command\n" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
+		}
+	}
+}
+
+func withoutFlags(execute ExecuteFunc) func(*flag.FlagSet) ExecuteFunc {
+	return func(*flag.FlagSet) ExecuteFunc { return execute }
+}
+
+func TestCommandHelpAndOptionValues(t *testing.T) {
+	command := Command{Name: "probe", New: func(flags *flag.FlagSet) ExecuteFunc {
+		label := flags.String("label", "default", "Probe label")
+		return func(context.Context, []string) (any, error) { return *label, nil }
+	}}
+	for _, args := range [][]string{{"help", "probe"}, {"probe", "--help"}} {
+		var out, diagnostic bytes.Buffer
+		if code := Run(context.Background(), args, &out, &diagnostic, "dev", []Command{command}); code != 0 || !bytes.Contains(out.Bytes(), []byte("Probe label")) || diagnostic.Len() != 0 {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
+		}
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"probe", "--label", "--json", "--json"}, "{\"command\":\"probe\",\"data\":\"--json\"}\n"},
+		{[]string{"probe", "--json"}, "{\"command\":\"probe\",\"data\":\"default\"}\n"},
+	} {
+		var out, diagnostic bytes.Buffer
+		if code := Run(context.Background(), tc.args, &out, &diagnostic, "dev", []Command{command}); code != 0 || out.String() != tc.want || diagnostic.Len() != 0 {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
+		}
 	}
 }
