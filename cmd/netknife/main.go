@@ -7,6 +7,8 @@ import (
 	"syscall"
 
 	"github.com/daniel-kindl/netknife/internal/cli"
+	"github.com/daniel-kindl/netknife/internal/commands"
+	"github.com/daniel-kindl/netknife/internal/info"
 )
 
 var version = "dev"
@@ -18,5 +20,5 @@ func main() {
 func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr, version, nil)
+	return cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr, version, []cli.Command{commands.Info(info.SystemSource())})
 }
