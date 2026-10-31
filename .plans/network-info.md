@@ -1,5 +1,5 @@
 # Feature: Local network information
-Status: IN_PROGRESS
+Status: COMPLETED
 Issue: #5
 Branch: feat/5-network-info
 PR: not created
@@ -22,16 +22,16 @@ Use net.Interfaces and Interface.Addrs through an injected function adapter. Kee
 Status: COMPLETED
 Depends on: none
 Proposed commit: feat(info): collect local interfaces
-Actual commit: 4100b55
+Actual commit: 4100b55; additional regression tests in bc38a62
 Objective: Return typed results with clear errors and cancellation.
 Work: Tests first, collector, system adapter.
 Verification: Deterministic fixture tests for populated, empty, failed and cancelled collection.
 Evidence: Collector tests first failed because the API did not exist. Fixture tests passed after implementation. Additional tests cover cancellation after address reads and later failures without partial results.
 ### C02: Register and document info
-Status: IN_PROGRESS
+Status: COMPLETED
 Depends on: C01
 Proposed commit: feat(info): add text and JSON command
-Actual commit: none
+Actual commit: bc38a62
 Objective: Make info available through the CLI.
 Work: CLI behavior tests first, command and text renderer, main registration, documentation. Add explicit UsageError classification so invalid info arguments return exit 2 before collection.
 Verification: Unit and CLI tests, live local command, race, vet, formatting and both Linux builds.
