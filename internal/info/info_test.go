@@ -77,3 +77,26 @@ func TestCancellation(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestCancellationAfterAddressRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	source := Source{Interfaces: func() ([]net.Interface, error) { return []net.Interface{{Name: "lo"}}, nil }, Addresses: func(net.Interface) ([]net.Addr, error) { cancel(); return nil, nil }}
+	got, err := Collect(ctx, source)
+	if !errors.Is(err, context.Canceled) || len(got.Interfaces) != 0 {
+		t.Fatalf("got %#v, error %v", got, err)
+	}
+}
+
+func TestNoPartialSnapshot(t *testing.T) {
+	source := Source{Interfaces: func() ([]net.Interface, error) { return []net.Interface{{Name: "lo"}, {Name: "eth0"}}, nil }, Addresses: func(iface net.Interface) ([]net.Addr, error) {
+		if iface.Name == "eth0" {
+			return nil, errors.New("device disappeared")
+		}
+		return nil, nil
+	}}
+	got, err := Collect(context.Background(), source)
+	if err == nil || err.Error() != "read addresses for eth0: device disappeared" || len(got.Interfaces) != 0 {
+		t.Fatalf("got %#v, error %v", got, err)
+	}
+}

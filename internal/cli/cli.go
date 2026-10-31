@@ -15,6 +15,11 @@ import (
 
 const DEFAULT_TIMEOUT = 10 * time.Second
 
+// UsageError identifies invalid command arguments before diagnostic execution.
+type UsageError struct{ Message string }
+
+func (err *UsageError) Error() string { return err.Message }
+
 // ExecuteFunc runs one invocation and returns data for rendering.
 // Implementations must honor ctx.
 type ExecuteFunc func(ctx context.Context, args []string) (any, error)
@@ -232,6 +237,10 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 		return checkContext()
 	}
 	if err != nil {
+		var usageError *UsageError
+		if errors.As(err, &usageError) {
+			return fail(err, 2)
+		}
 		return fail(err, 1)
 	}
 	if parsed.json {
