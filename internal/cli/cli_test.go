@@ -17,6 +17,9 @@ func TestCLIContract(t *testing.T) {
 		out, diagnostic string
 	}{
 		{[]string{"version"}, 0, "dev\n", ""},
+		{[]string{"-v"}, 0, "dev\n", ""},
+		{[]string{"--version"}, 0, "dev\n", ""},
+		{[]string{"version", "--json=false"}, 0, "dev\n", ""},
 		{[]string{"version", "--json"}, 0, "{\"command\":\"version\",\"data\":{\"version\":\"dev\"}}\n", ""},
 		{[]string{"--json", "version"}, 0, "{\"command\":\"version\",\"data\":{\"version\":\"dev\"}}\n", ""},
 		{[]string{"missing"}, 2, "", "netknife: unknown command \"missing\"\n"},
@@ -128,10 +131,15 @@ func TestWriteFailures(t *testing.T) {
 }
 
 func TestTimeoutDuringExecution(t *testing.T) {
-	command := Command{Name: "probe", Execute: func(ctx context.Context, _ []string) (any, error) { <-ctx.Done(); return nil, ctx.Err() }}
+	started := false
+	command := Command{Name: "probe", Execute: func(ctx context.Context, _ []string) (any, error) {
+		started = true
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
 	var out, diagnostic bytes.Buffer
-	if code := Run(context.Background(), []string{"probe", "--timeout=1ms", "--json"}, &out, &diagnostic, "dev", []Command{command}); code != 1 || out.Len() != 0 || diagnostic.String() != "netknife: timeout exceeded\n" {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
+	if code := Run(context.Background(), []string{"probe", "--timeout=1s", "--json"}, &out, &diagnostic, "dev", []Command{command}); code != 1 || !started || out.Len() != 0 || diagnostic.String() != "netknife: timeout exceeded\n" {
+		t.Fatalf("started=%v code=%d stdout=%q stderr=%q", started, code, out.String(), diagnostic.String())
 	}
 }
 
