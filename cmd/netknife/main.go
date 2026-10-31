@@ -1,19 +1,22 @@
 package main
 
 import (
-	"fmt"
-	"io"
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/daniel-kindl/netknife/internal/cli"
 )
 
-func run(out io.Writer) error {
-	_, err := fmt.Fprintln(out, "netknife: network diagnostics toolkit")
-	return err
-}
+var version = "dev"
 
 func main() {
-	if err := run(os.Stdout); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	os.Exit(run())
+}
+
+func run() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr, version, nil)
 }
