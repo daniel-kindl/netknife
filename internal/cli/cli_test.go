@@ -176,9 +176,13 @@ func TestCommandOwnsFlags(t *testing.T) {
 }
 
 func TestVersionShortcutIsStandalone(t *testing.T) {
+	info := Command{Name: "info", New: withoutFlags(func(context.Context, []string) (any, error) {
+		t.Fatal("info executed despite conflicting version shortcut")
+		return nil, nil
+	})}
 	for _, args := range [][]string{{"--version", "info"}, {"info", "--version"}, {"-v", "version"}} {
 		var out, diagnostic bytes.Buffer
-		if code := Run(context.Background(), args, &out, &diagnostic, "dev", nil); code != 2 || out.Len() != 0 || diagnostic.String() != "netknife: --version and -v must be used without a command\n" {
+		if code := Run(context.Background(), args, &out, &diagnostic, "dev", []Command{info}); code != 2 || out.Len() != 0 || diagnostic.String() != "netknife: --version and -v must be used without a command\n" {
 			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
 		}
 	}
@@ -208,6 +212,28 @@ func TestCommandHelpAndOptionValues(t *testing.T) {
 	} {
 		var out, diagnostic bytes.Buffer
 		if code := Run(context.Background(), tc.args, &out, &diagnostic, "dev", []Command{command}); code != 0 || out.String() != tc.want || diagnostic.Len() != 0 {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
+		}
+	}
+}
+
+func TestCommandBooleanAndMissingValue(t *testing.T) {
+	command := Command{Name: "probe", New: func(flags *flag.FlagSet) ExecuteFunc {
+		enabled := flags.Bool("enabled", false, "Enable probe")
+		flags.Int("count", 1, "Number of checks")
+		return func(context.Context, []string) (any, error) { return *enabled, nil }
+	}}
+	for _, tc := range []struct {
+		args            []string
+		code            int
+		out, diagnostic string
+	}{
+		{[]string{"probe", "--enabled", "--json"}, 0, "{\"command\":\"probe\",\"data\":true}\n", ""},
+		{[]string{"probe", "--enabled=false", "--json"}, 0, "{\"command\":\"probe\",\"data\":false}\n", ""},
+		{[]string{"probe", "--count"}, 2, "", "netknife: --count requires a value\n"},
+	} {
+		var out, diagnostic bytes.Buffer
+		if code := Run(context.Background(), tc.args, &out, &diagnostic, "dev", []Command{command}); code != tc.code || out.String() != tc.out || diagnostic.String() != tc.diagnostic {
 			t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), diagnostic.String())
 		}
 	}
