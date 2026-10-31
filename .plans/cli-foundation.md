@@ -1,5 +1,5 @@
 # Feature: CLI foundation
-Status: IN_PROGRESS
+Status: COMPLETED
 Issue: #4
 Branch: feat/4-cli-foundation
 PR: #11
@@ -19,17 +19,17 @@ No runtime dependencies. Linux AMD64 and ARM64. Continue the existing session cl
 Separate the runner into internal/cli. Command functions return structured data; text rendering is a separate function. Common flags can appear before or after the command. Execution timeout defaults to 10s. JSON errors remain on stderr with empty stdout. Use uppercase constant names per dkstack.
 ## Commit plan
 ### C01: Replace draft foundation
-Status: IN_PROGRESS
+Status: COMPLETED
 Depends on: none
 Proposed commit: feat(cli): replace draft command foundation
-Actual commit: none
+Actual commit: 124511f, e592e83
 Objective: Make the command contract usable by the diagnostic issues.
 Work: Write failing behavior tests, implement runner and renderers, document contract.
 Verification: Tests, vet, formatting, race test, Linux builds and binary smoke checks.
 Evidence: New runner tests first failed with undefined Run and Command. Tests now pass, including race checks. Vet, formatting, diff checks, AMD64 and ARM64 builds pass. A deliberate timeout mutation caused TestDiagnosticRendering to fail and was restored. Independent design review findings addressed or documented.
 ## Final verification
-Inspect the diff against issue #4 and run all project gates.
+Issue, commit, and check comparisons completed by separate agents. Race tests, vet, formatting, diff checks and both Linux builds passed. Deadline test requires execution entry. OS signal delivery is NOT RUN as an automated process test; signal.NotifyContext wiring was inspected. README defines the output contract.
 ## Handoff
-Next action: Commit and update PR #11.
+Next action: Remove the completed plan and update PR #11.
 Blockers: none
 Risks: Command-specific result schemas will be defined by the diagnostic issues.
