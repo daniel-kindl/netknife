@@ -28,10 +28,11 @@ type ExecuteFunc func(ctx context.Context, args []string) (any, error)
 // command-specific flags. It must not register the reserved common option names.
 // The returned function receives positional arguments after option parsing.
 type Command struct {
-	Name    string
-	Summary string
-	New     func(flags *flag.FlagSet) ExecuteFunc
-	Text    func(out io.Writer, data any) error
+	Name      string
+	Summary   string
+	Arguments string // Arguments describes positional values in command help.
+	New       func(flags *flag.FlagSet) ExecuteFunc
+	Text      func(out io.Writer, data any) error
 }
 
 type options struct {
@@ -174,11 +175,15 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 				target = positional[0]
 			}
 		}
+		arguments := ""
 		if target != "" && target != "help" {
 			found := false
 			for _, command := range available {
 				if command.Name == target {
 					found = true
+					if command.Arguments != "" {
+						arguments = " " + command.Arguments
+					}
 					if parsed.flags == nil {
 						parsed.flags = flag.NewFlagSet(target, flag.ContinueOnError)
 						command.New(parsed.flags)
@@ -191,7 +196,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 		}
 		var text strings.Builder
 		if target != "" && target != "help" {
-			fmt.Fprintf(&text, "Usage: netknife %s [options]\n", target)
+			fmt.Fprintf(&text, "Usage: netknife %s%s [options]\n", target, arguments)
 		} else {
 			fmt.Fprintln(&text, "Usage: netknife <command> [options]\n\nCommands:\n  help       Show help")
 			for _, command := range available {
